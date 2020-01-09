@@ -17,8 +17,8 @@ apt-get install --force-yes -y python3-dev libpython3-dev
 mysql -u root -pr00t < bank/schema.sql
 
 # install
-pip3 install bottle
 pip3 install mysql-connector-python
+pip3 install pyzmq
 
 # copy contents
 sudo cp bank/bank.conf /etc/init
