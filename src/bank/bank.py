@@ -95,8 +95,16 @@ class Message:
 		return Message("DEBIT", amount)
 
 	@staticmethod
-	def refuse():
+	def refused():
 		return Message("REFUSED", -1)
+
+	@staticmethod
+	def connect():
+		return Message("CONNECT", -1)
+
+	@staticmethod
+	def ok():
+		return Message("OK", -1)
 
 	def __init__(self, message_type, amount):
 		self.type = message_type
@@ -107,6 +115,12 @@ class Message:
 
 	def is_debit(self):
 		return self.type == "DEBIT"
+
+	def is_connect(self):
+		return self.type == "CONNECT"
+
+	def is_ok(self):
+		return self.type == "ok"
 
 	def to_dict(self):
 		return dict(
@@ -137,7 +151,34 @@ class Bank:
 		# socket to given peer can be accessed as _peers["host:port"]
 		self._peers = []
 
+		# whether or not can messages be sent/received through main socket
+		# when client connects to this socket, simple handshake will happen
+		# which will set this condition to True
+		self._main_socket_ready = False
+
+		# Condition for main server loop
+		self._should_run = True
+
 		self._init_queues(other_banks)
+
+	def _peer_handshake(self, other_peer):
+		"""
+		Do the initial handshake with peer this bank is trying to connect to.
+		:param string other_peer: Address bank is trying to connect to
+		:return: Socket if handshake is successful.
+		"""
+
+		logging.info("Handshake with \"%s\"." % other_peer)
+		s = self._context.socket(zmq.PAIR)
+		s.connect("tcp://%s" % other_peer)
+		s.send_json(Message.connect().to_dict())
+		resp = s.recv_json()
+		if Message.from_dict(resp).is_ok():
+			logging.info("Handshake successful.")
+			return s
+		else:
+			logging.info("Error during handshake.")
+			return None
 
 	def _init_queues(self, other_banks):
 		"""
@@ -150,25 +191,28 @@ class Bank:
 		if self._port is not None:
 			self._socket = self._context.socket(zmq.PAIR)
 			self._socket.bind("tcp://*:%s" % self._port)
-			self._poller.register(self._socket)
+			self._poller.register(self._socket, zmq.POLLIN)
 		else:
 			self._socket = None
 
 		# connect to neighbours
 		for other_bank in other_banks:
-			s = self._context.socket(zmq.PAIR)
-			s = self._context.connect("tcp://%s" % other_bank)
-			self._peers.append(s)
-			self._poller.register(s)
+			s = self._peer_handshake(other_bank)
+			if s is not None:
+				self._peers.append(s)
+				self._poller.register(s, zmq.POLLIN)
 
-	def _get_all_peers(self):
+	def _get_available_peers(self, include_main_if_not_ready = False):
 		"""
 		Returns all sockets - peers + the one bank is listening on.
+
+		:param bool include_main_if_not_ready: If the flag is set, main socket will be included even if it is not ready yet.
 		"""
 		peers = [] + self._peers
 
 		if self._socket is not None:
-			peers.append(self._socket)
+			if include_main_if_not_ready or self._main_socket_ready:
+				peers.append(self._socket)
 
 		return peers
 
@@ -188,7 +232,6 @@ class Bank:
 		"""
 
 		logging.info("Starting receive/send loop.")
-		self._should_run = True
 		while self._should_run:
 			self._recv_messages()
 			self._generate_message()
@@ -206,7 +249,10 @@ class Bank:
 		# choose target to send message to
 		# either main socket this bank is listening on
 		# or one of the peers this bank is connected to
-		peers = self._get_all_peers()
+		peers = self._get_available_peers()
+		if len(peers) == 0:
+			return
+		
 		rand = randrange(len(peers))
 		target = peers[rand]
 
@@ -216,11 +262,26 @@ class Bank:
 		else:
 			self._send_debit(amount, target)
 
+	def _check_connection_message(self, message):
+		"""
+		Checks for incoming CONNECT message on main socket. If it is, OK message is immediately sent back.
+		Otherwise REFUSED is sent back
+
+		:param Message message: Received message.
+		:return:
+		"""
+		if message.is_connect():
+			logging.info("Connection message received on main socket. Main socket ready.")
+			self._socket.send_json(Message.ok().to_dict())
+			self._main_socket_ready = True
+		else:
+			logging.info("Wrong message received on main socket.")
+			self._socket.send_json(Message.refused().to_dict())
+
 	def _recv_messages(self):
 		"""
 		Poll for messages from ZeroMQ. Timeout is between 10 and 100 ms.
 		"""
-
 		t = 10 + randrange(10000)
 		socks = dict(self._poller.poll(timeout=t))
 
@@ -228,10 +289,18 @@ class Bank:
 			logging.info("%d sockets polled." % len(socks))
 
 			# find which socket has received the message
-			for socket in self._peers:
-				if socket in socks:
-					msg = socket.recv_json()
-					self._process_message(Message.from_dict(msg), socket)
+			for socket in self._get_available_peers(True):
+				if socket in socks and socks[socket] == zmq.POLLIN:
+					msg = Message.from_dict(socket.recv_json())
+
+					if socket == self._socket and not self._main_socket_ready:
+						# message on main socket that is not ready yet received
+						# check if it's connection or not
+						self._check_connection_message(msg)
+
+					else:
+						# receive normal message from socket
+						self._process_message(msg, socket)
 
 	def _process_message(self, message, sender):
 		"""
@@ -288,7 +357,7 @@ class Bank:
 		"""
 		Sends REFUSED message to target.
 		"""
-		target.send_json(Message.refuse().to_dict())
+		target.send_json(Message.refused().to_dict())
 
 
 def main():
@@ -313,7 +382,6 @@ def main():
 		logging.warning("No original amount.")
 
 	bank = Bank('0.0.0.0', 8100, True, db_connector, [])
-	input("...")
 	bank.start_server()
 	db_connector.close_connection()
 
