@@ -50,7 +50,7 @@ class DbConnector:
 		"""
 		Credits given amount of money to the account.
 		"""
-		logging.info("crediting %d" % amount)
+		logging.debug("DB: Crediting %d" % amount)
 		self._perform_update_query(
 			"update account set balance = balance + %s where id = %s;",
 			amount
@@ -60,7 +60,7 @@ class DbConnector:
 		"""
 		Debits given amount of money from the account.
 		"""
-		logging.info("debiting %d" % amount)
+		logging.debug("DB: Debiting %d" % amount)
 		self._perform_update_query(
 			"update account set balance = balance - %s where id = %s;",
 			amount
@@ -120,13 +120,16 @@ class Message:
 		return self.type == "CONNECT"
 
 	def is_ok(self):
-		return self.type == "ok"
+		return self.type == "OK"
 
 	def to_dict(self):
 		return dict(
 			type=self.type,
 			amount=self.amount
 		)
+
+	def __str__(self):
+		return str(self.to_dict())
 
 
 class Bank:
@@ -252,7 +255,7 @@ class Bank:
 		peers = self._get_available_peers()
 		if len(peers) == 0:
 			return
-		
+
 		rand = randrange(len(peers))
 		target = peers[rand]
 
@@ -310,6 +313,8 @@ class Bank:
 		:param Message message: Message received from queue.
 		:param Socket sender: Sender of the received message.
 		"""
+		logging.info("Message received: %s." % message)
+
 		if message.is_credit():
 			self._credit(message.amount)
 		elif message.is_debit():
@@ -324,14 +329,12 @@ class Bank:
 		"""
 		Credits given amount to this bank.
 		"""
-		logging.info("Credit: " + str(amount))
 		self._db_connector.credit_money(amount)
 
 	def _debit(self, amount, target):
 		"""
 		Sends given amount of money back to target or sends REFUSE if there's not enough money in the account.
 		"""
-		logging.info("Debit: " + str(amount) + " message from " + str(target))
 		self._send_credit(amount, target)
 
 	def _send_credit(self, amount, target):
