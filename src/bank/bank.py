@@ -205,7 +205,7 @@ class Bank:
 				self._peers.append(s)
 				self._poller.register(s, zmq.POLLIN)
 
-	def _get_available_peers(self, include_main_if_not_ready = False):
+	def _get_available_peers(self, include_main_if_not_ready=False):
 		"""
 		Returns all sockets - peers + the one bank is listening on.
 
