@@ -103,6 +103,10 @@ class Message:
 		return Message("CONNECT", -1)
 
 	@staticmethod
+	def marker(marker_id):
+		return Message("MARKER", marker_id)
+
+	@staticmethod
 	def ok():
 		return Message("OK", -1)
 
@@ -122,6 +126,9 @@ class Message:
 	def is_ok(self):
 		return self.type == "OK"
 
+	def is_marker(self):
+		return self.type == "MARKER"
+
 	def to_dict(self):
 		return dict(
 			type=self.type,
@@ -132,18 +139,160 @@ class Message:
 		return str(self.to_dict())
 
 
+class LocalState:
+	"""
+	Data structure to hold info about local state.
+
+	This structure is valid for one instance of CH-L algorithm.
+	"""
+
+	def __init__(self, status, channel, max_channel_count):
+		"""
+		Initializes new structure for capturing the local state.
+
+		:param int status: Status of the process - should be current amount of money in bank.
+		:param channel: Sender which has sent the MARKER message (empty message list is created)
+		:param int max_channel_count: Number of channels to record. After all channels are recorded, status
+		is marked as complete.
+		:return:
+		"""
+		self._status = status
+		self._max_channel_count = max_channel_count
+
+		# each channel gets its own list for capturing messages
+		self._pending_channel_messages = {channel: []}
+
+		# once the marker is received from channel, its' messages are moved
+		# from _pending_channel_message here
+		self._complete_chanel_messages = {}
+
+		self._complete = False
+
+	def add_message(self, channel, message):
+		"""
+		Adds message for given channel.
+
+		:param channel: Channel from which the message was received.
+		:param Message message: Received message.
+		:return:
+		"""
+		if channel not in self._pending_channel_messages and channel not in self._complete_chanel_messages:
+			self._pending_channel_messages[channel] = []
+
+		self._pending_channel_messages[channel].append(message)
+
+	def is_complete(self):
+		return self._complete
+
+	def mark_channel_as_complete(self, channel):
+		"""
+		Moves messages for this channel from pending to complete list.
+
+		:param channel: Channel on which communication is to be recorded no longer.
+		:return:
+		"""
+		if channel in self._pending_channel_messages:
+			self._complete_chanel_messages[channel] = self._pending_channel_messages[channel]
+			self._pending_channel_messages.pop(channel)
+
+		if len(self._complete_chanel_messages) == self._max_channel_count:
+			self._complete = True
+
+	def to_dict(self):
+		return dict(
+			status=self._status,
+			channel_messages=self._pending_channel_messages
+		)
+
+
+class StatesHolder:
+	"""
+	Class that holds info about all local states of one bank (more than snapshot can be taken at a time).
+	"""
+
+	def __init__(self):
+		# marker_id -> state
+		self._states = {}
+
+	def any_capture_active(self):
+		"""
+		Checks if any snapshot of global state is being taken at a time.
+		:return:
+		"""
+		return len(self._states) > 0
+
+	def new_global_state(self, marker_id, status, sender, max_channel_count):
+		"""
+		Adds a new global state structure for given marker_id.
+
+		:param int marker_id: Unique id of marker message.
+		:param int status: Node status.
+		:param sender: Sender who has sent the MARKER message.
+		:param int max_channel_count: Number of channels to record.
+		:return:
+		"""
+		self._states[marker_id] = LocalState(status, sender, max_channel_count)
+
+	def is_state_recorded(self, marker_id):
+		"""
+		Checks if the state for given marker_id was already recorded.
+		:param int marker_id: Id of marker.
+		:return:
+		"""
+		return marker_id in self._states
+
+	def capture_message(self, sender, message):
+		"""
+		Adds message from given sender to all global states.
+
+		:param sender: Sender of the message.
+		:param Message message: Received message.
+		:return:
+		"""
+
+		for marker_id, status in self._states:
+			status.add_message(sender, message)
+
+	def mark_channel_as_complete(self, marker_id, sender):
+		"""
+		Marks channel in state object given by marker_id as complete and messages will
+		no longer be recorded for this channel.
+
+		:param int marker_id: Id of marker message.
+		:param sender: Channel from which the marker message was received.
+		:return:
+		"""
+		if marker_id in self._states:
+			self._states[marker_id].mark_channel_as_complete(sender)
+
+	def is_status_complete(self, marker_id):
+		"""
+		Checks if the status with given marker_id si complete.
+		:param int marker_id: Id of MARKER message.
+		:return: True if the status is complete.
+		"""
+		if marker_id in self._states:
+			return self._states[marker_id].is_complete()
+		else:
+			return False
+
+	def get_state(self, marker_id):
+		return self._states[marker_id]
+
+
 class Bank:
 	"""
 	Implementation of the bank server.
 	"""
 
-	def __init__(self, host, port, debug, db_connector, other_banks):
+	def __init__(self, host, port, debug, db_connector, other_banks, state_collector):
 		"""
 		Initializes this server with given values.
 		
 		:param string host: IP address of this bank.
 		:param port: Port this bank should listen on. If None, bank will not expect any connections.
-		:param list other_banks: List of banks this one hould connect to via ZeroMQ. Each entry should be in format <host>:<port>.
+		:param list other_banks: List of banks this one should connect to via ZeroMQ. Each entry should be in format <host>:<port>.
+		:param string state_collector: Address and port of state collector.
 		"""
 		self._host = host
 		self._port = port
@@ -162,7 +311,19 @@ class Bank:
 		# Condition for main server loop
 		self._should_run = True
 
+		# object for collecting global status
+		self._status_holder = StatesHolder()
+
 		self._init_queues(other_banks)
+
+	def _connect_to_state_collector(self, state_collector):
+		"""
+		Connects to state collector.
+		:param string state_collector: Address of the collector service.
+		:return:
+		"""
+		self._collector_socket = self._context.socket(zmq.PAIR)
+		self._collector_socket.connect("tcp://%s" % state_collector)
 
 	def _peer_handshake(self, other_peer):
 		"""
@@ -322,8 +483,37 @@ class Bank:
 				self._debit(message.amount, sender)
 			else:
 				self._send_refuse(sender)
+		elif message.is_marker():
+			self._handle_global_state(message, sender)
 		else:
 			logging.info("Refused from %s." % str(sender))
+
+	def _handle_global_state(self, message, sender):
+		"""
+		Handles incoming MARKER message. Chandy-Lamport
+		algorithm is implemented here.
+
+		:param message: Received marker message. Message.amount is used as marker ID.
+		:param sender: Sender of the message.
+		:return:
+		"""
+		marker_id = message.amount
+
+		if not self._status_holder.is_state_recorded(marker_id):
+			# 1. mark my current state and send markers to other peers (state = amount of money in the bank)
+			# 2. mark the state of sender as empty list
+			self._mark_my_status(marker_id, sender)
+			self._send_markers(marker_id)
+
+			# 3. all incoming messages will be recorded
+		else:
+			# token with given marker_id was already received -> my state was already marked down
+			# stop recording messages from sender
+			self._status_holder.mark_channel_as_complete(marker_id, sender)
+
+			# messages from all channels recorded -> algorithm ends
+			if self._status_holder.is_status_complete(marker_id):
+				self._report_status(marker_id)
 
 	def _credit(self, amount):
 		"""
@@ -362,6 +552,36 @@ class Bank:
 		"""
 		target.send_json(Message.refused().to_dict())
 
+	def _send_markers(self, marker_id):
+		"""
+		Sends MARKER message with given id to all peers.
+		:param int marker_id: Id of marker message.
+		:return:
+		"""
+		peers = self._get_available_peers()
+		for peer in peers:
+			peer.send_json(Message.marker(marker_id).to_dict())
+
+	def _mark_my_status(self, marker_id, sender):
+		"""
+		Creates new GlobalState object for marker_id
+		:param int marker_id: Id of marker message.
+		:param sender: Peer from which the marker message was received.
+		:return:
+		"""
+		self._status_holder.new_global_state(marker_id, self._db_connector.get_amount(),
+											sender, len(self._get_available_peers()))
+
+	def _report_status(self, marker_id):
+		"""
+		Reports my status to the global state collector service.
+
+
+		:param int marker_id: Id of snapshot to report.
+		:return:
+		"""
+		self._collector_socket.send_json(self._status_holder.get_state(marker_id))
+
 
 def main():
 	"""
@@ -384,7 +604,7 @@ def main():
 	else:
 		logging.warning("No original amount.")
 
-	bank = Bank('0.0.0.0', 8100, True, db_connector, [])
+	bank = Bank('0.0.0.0', 8100, True, db_connector, [], "")
 	bank.start_server()
 	db_connector.close_connection()
 
