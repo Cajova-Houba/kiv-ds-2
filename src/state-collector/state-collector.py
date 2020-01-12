@@ -1,18 +1,76 @@
 import zmq
+import logging
 
-def print_state_message():
+
+def print_state_message(message):
 	# todo: print state message received from bank
 	pass
 
-def start_listening():
-	# todo: start listenining on ports
-	pass
+
+def start_listening(configuration):
+	"""
+	Starts listening on ports given by configuration and starts to
+	poll bound sockets for incoming messages.
+
+	:param dict configuration: "port" should contain list with ports to bind to.
+	:return:
+	"""
+	# initialize sockets and poller
+	context = zmq.Context()
+	sockets = []
+	poller = zmq.Poller()
+	for port in configuration["ports"]:
+		s = context.socket(zmq.PAIR)
+		s.bind("tcp://*:%s" % port)
+		poller.register(s, zmq.POLLIN)
+		sockets.append(s)
+
+	should_run = True
+
+	# run in loop
+	while should_run:
+		messages = dict(poller.poll(timeout=10))
+		if len(messages) > 0:
+			for socket in sockets:
+				if socket in messages and messages[socket] == zmq.POLLIN:
+					message = socket.recv_json()
+					print_state_message(message)
+
 
 def load_configuration():
-	# todo: load configuration with ports to listen on
-	pass
+	"""
+	Loads port this collector should listen on from configuration file.
+	Each line is expected to contain exactly one port number.
+
+	:return:
+	"""
+	file_name = "collector.txt"
+	if not os.path.isfile(file_name):
+		logging.error("Configuration file %s does not exist." % file_name)
+		return None
+
+	with open(file_name, "r") as f:
+		lines = f.readlines()
+
+	return dict(
+		ports=lines
+	)
+
 
 def main():
-	print("This is the state collector")
-	
+	logging.basicConfig(filename='log.txt',
+						filemode='a',
+						format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
+						datefmt='%H:%M:%S',
+						level=logging.DEBUG)
+
+	configuration = load_configuration()
+	if configuration is None:
+		return
+
+	logging.info("Starting global state collector.")
+	start_listening(configuration)
+
+
+# script body
 main()
