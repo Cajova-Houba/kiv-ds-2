@@ -415,8 +415,6 @@ class Bank:
 		Generate and send one message to direct neighbor. Always generates DEBIT
 		message if there's not enough money in the bank.
 		"""
-		logging.info("Generating message.")
-		amount = 10000 + randrange(40001)
 
 		# choose target to send message to
 		# either main socket this bank is listening on
@@ -425,6 +423,9 @@ class Bank:
 		if len(peers) == 0:
 			return
 
+		logging.info("Generating message.")
+
+		amount = 10000 + randrange(40001)
 		rand = randrange(len(peers))
 		target = peers[rand]
 
@@ -434,7 +435,7 @@ class Bank:
 		else:
 			self._send_debit(amount, target)
 
-	def _check_connection_message(self, message):
+	def _check_connection_message(self, message, socket):
 		"""
 		Checks for incoming CONNECT message on main socket. If it is, OK message is immediately sent back.
 		Otherwise REFUSED is sent back
@@ -442,14 +443,14 @@ class Bank:
 		:param Message message: Received message.
 		:return:
 		"""
-		# todo: for all my sockets
+
 		if message.is_connect():
 			logging.info("Connection message received on main socket. Main socket ready.")
-			self._socket.send_json(Message.ok().to_dict())
-			self._main_socket_ready = True
+			socket.send_json(Message.ok().to_dict())
+			self._sockets_ready[socket] = True
 		else:
 			logging.info("Wrong message received on main socket.")
-			self._socket.send_json(Message.refused().to_dict())
+			socket.send_json(Message.refused().to_dict())
 
 	def _recv_messages(self):
 		"""
@@ -466,8 +467,7 @@ class Bank:
 				if socket in socks and socks[socket] == zmq.POLLIN:
 					msg = Message.from_dict(socket.recv_json())
 
-					# todo: for all my sockets
-					if socket == self._socket and not self._main_socket_ready:
+					if self._is_my_socket_that_is_not_ready(socket):
 						# message on main socket that is not ready yet received
 						# check if it's connection or not
 						self._check_connection_message(msg)
@@ -591,6 +591,15 @@ class Bank:
 		:return:
 		"""
 		self._collector_socket.send_json(self._status_holder.get_state(marker_id))
+
+	def _is_my_socket_that_is_not_ready(self, socket):
+		"""
+		Checks if the given socket is 'my socket' (the one the bank is listening on) that is not ready yet.
+
+		:param socket:
+		:return:
+		"""
+		return socket in self._my_sockets and not self._sockets_ready[socket]
 
 
 def load_configuration(bank_id):
