@@ -5,6 +5,7 @@
 # 
 # Banks use ZeroMQ to communicate with eachother.
 #
+import os
 
 import mysql.connector
 import logging
@@ -285,20 +286,23 @@ class Bank:
 	Implementation of the bank server.
 	"""
 
-	def __init__(self, host, port, debug, db_connector, other_banks, state_collector):
+	def __init__(self, host, ports, debug, db_connector, other_banks, state_collector):
 		"""
 		Initializes this server with given values.
 		
 		:param string host: IP address of this bank.
-		:param port: Port this bank should listen on. If None, bank will not expect any connections.
+		:param list ports: Ports this bank should listen on. If empty, bank will not expect any connections.
 		:param list other_banks: List of banks this one should connect to via ZeroMQ. Each entry should be in format <host>:<port>.
 		:param string state_collector: Address and port of state collector.
 		"""
 		self._host = host
-		self._port = port
+		self._ports = ports
 		self._debug = debug
 		self._db_connector = db_connector
 		self._context = zmq.Context()
+
+		# sockets bank is listening on
+		self._my_sockets = []
 
 		# socket to given peer can be accessed as _peers["host:port"]
 		self._peers = []
@@ -306,13 +310,15 @@ class Bank:
 		# whether or not can messages be sent/received through main socket
 		# when client connects to this socket, simple handshake will happen
 		# which will set this condition to True
-		self._main_socket_ready = False
+		self._sockets_ready = dict()
 
 		# Condition for main server loop
 		self._should_run = True
 
 		# object for collecting global status
 		self._status_holder = StatesHolder()
+
+		self._connect_to_state_collector(state_collector)
 
 		self._init_queues(other_banks)
 
@@ -347,17 +353,19 @@ class Bank:
 	def _init_queues(self, other_banks):
 		"""
 		Initializes connections to other banks and starts to listen on given port (if the port is set).
+
+		:param list other_banks:
 		"""
 
 		self._poller = zmq.Poller()
 
-		# start listening if port is set
-		if self._port is not None:
-			self._socket = self._context.socket(zmq.PAIR)
-			self._socket.bind("tcp://*:%s" % self._port)
-			self._poller.register(self._socket, zmq.POLLIN)
-		else:
-			self._socket = None
+		# start listening if ports are set
+		for port in self._ports:
+			socket = self._context.socket(zmq.PAIR)
+			socket.bind("tcp://*:%s" % port)
+			self._my_sockets.append(socket)
+			self._poller.register(socket, zmq.POLLIN)
+			self._sockets_ready[socket] = False
 
 		# connect to neighbours
 		for other_bank in other_banks:
@@ -366,17 +374,17 @@ class Bank:
 				self._peers.append(s)
 				self._poller.register(s, zmq.POLLIN)
 
-	def _get_available_peers(self, include_main_if_not_ready=False):
+	def _get_available_peers(self, include_my_if_not_ready=False):
 		"""
-		Returns all sockets - peers + the one bank is listening on.
+		Returns all sockets - peers + the ones bank is listening on.
 
-		:param bool include_main_if_not_ready: If the flag is set, main socket will be included even if it is not ready yet.
+		:param bool include_my_if_not_ready: If the flag is set, my sockets will be included even if it is not ready yet.
 		"""
 		peers = [] + self._peers
 
-		if self._socket is not None:
-			if include_main_if_not_ready or self._main_socket_ready:
-				peers.append(self._socket)
+		for my_socket in self._my_sockets:
+			if include_my_if_not_ready or self._sockets_ready[my_socket]:
+				peers.append(my_socket)
 
 		return peers
 
@@ -434,6 +442,7 @@ class Bank:
 		:param Message message: Received message.
 		:return:
 		"""
+		# todo: for all my sockets
 		if message.is_connect():
 			logging.info("Connection message received on main socket. Main socket ready.")
 			self._socket.send_json(Message.ok().to_dict())
@@ -457,6 +466,7 @@ class Bank:
 				if socket in socks and socks[socket] == zmq.POLLIN:
 					msg = Message.from_dict(socket.recv_json())
 
+					# todo: for all my sockets
 					if socket == self._socket and not self._main_socket_ready:
 						# message on main socket that is not ready yet received
 						# check if it's connection or not
@@ -583,6 +593,50 @@ class Bank:
 		self._collector_socket.send_json(self._status_holder.get_state(marker_id))
 
 
+def load_configuration(bank_id):
+	"""
+	Loads configuration of bank addresses and state collector address.
+	:return:
+	"""
+	bank_addr_file = "bank-addrs.csv"
+	state_collect_file = "collector.txt"
+
+	logging.info("Loading configuration")
+
+	res = None
+	if not os.path.isfile(bank_addr_file):
+		logging.error("Configuration file '%s' with bank addresses not found." % bank_addr_file)
+		return res
+
+	if not os.path.isfile(state_collect_file):
+		logging.error("Configuration file '%s' with state collector not found." % state_collect_file)
+		return res
+
+	res = dict()
+	bank_conf = dict()
+
+	with open(state_collect_file, "r") as f:
+		res["state_collector"] = f.read()
+
+	with open(bank_addr_file, "r") as f:
+		for line in f.readlines():
+			items = line.split(',')
+			if items[0] not in bank_conf:
+				bank_conf[items[0]] = dict(
+					ports=[],
+					other_banks=[]
+				)
+
+				if len(items) > 1 :
+					bank_conf[items[0]]["ports"] = items[1:]
+			else:
+				bank_conf[items[0]]["other_banks"] = items[1:]
+
+	res["bank_conf"] = bank_conf[bank_id] if bank_id in bank_conf else dict(ports=[], other_banks=[])
+
+	return res
+
+
 def main():
 	"""
 	Main method of the script, starts the server.
@@ -596,6 +650,11 @@ def main():
 	console.setLevel(logging.DEBUG)
 	logging.getLogger('').addHandler(console)
 
+	bank_id = 1
+	configuration = load_configuration(bank_id)
+	if configuration is None:
+		exit(1)
+
 	logging.info("Bank starting")
 	db_connector = DbConnector()
 	amount = db_connector.get_amount()
@@ -604,7 +663,12 @@ def main():
 	else:
 		logging.warning("No original amount.")
 
-	bank = Bank('0.0.0.0', 8100, True, db_connector, [], "")
+	bank = Bank(host='0.0.0.0',
+				ports=configuration["bank_conf"]["ports"],
+				debug=True,
+				db_connector=db_connector,
+				other_banks=configuration["bank_conf"]["other_banks"],
+				state_collector=configuration["state_collector"])
 	bank.start_server()
 	db_connector.close_connection()
 
