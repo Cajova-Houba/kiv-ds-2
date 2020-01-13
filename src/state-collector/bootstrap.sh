@@ -1,14 +1,15 @@
 #!/bin/bash
-sudo stop bank
+sudo stop state-collector
 
 export DEBIAN_FRONTEND=noninteractive
 
 # python
-apt-get install --force-yes -y python3
-apt-get install --force-yes -y python3-pip
+sudo apt-get install --force-yes -y python3
+sudo apt-get install --force-yes -y python3-pip
+sudo apt-get install --force-yes -y libzmq3-dev python-zmq
 
 # install
-pip3 install pyzmq
+sudo pip3 install pyzmq
 
 # copy contents
 sudo cp state-collector/state-collector.conf /etc/init

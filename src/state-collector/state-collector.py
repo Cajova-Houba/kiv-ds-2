@@ -1,10 +1,9 @@
 import zmq
 import logging
-
+import os
 
 def print_state_message(message):
-	# todo: print state message received from bank
-	pass
+	logging.info(message)
 
 
 def start_listening(configuration):
@@ -20,6 +19,7 @@ def start_listening(configuration):
 	sockets = []
 	poller = zmq.Poller()
 	for port in configuration["ports"]:
+		logging.info("Listening on port: %s" % port)
 		s = context.socket(zmq.PAIR)
 		s.bind("tcp://*:%s" % port)
 		poller.register(s, zmq.POLLIN)
@@ -57,12 +57,21 @@ def load_configuration():
 	)
 
 
-def main():
+def configure_logging(include_console=False):
 	logging.basicConfig(filename='log.txt',
 						filemode='a',
 						format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
 						datefmt='%H:%M:%S',
 						level=logging.DEBUG)
+
+	if include_console:
+		console = logging.StreamHandler()
+		console.setLevel(logging.DEBUG)
+		logging.getLogger('').addHandler(console)
+
+
+def main():
+	configure_logging(True)
 
 	configuration = load_configuration()
 	if configuration is None:

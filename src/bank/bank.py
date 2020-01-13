@@ -6,6 +6,7 @@
 # Banks use ZeroMQ to communicate with eachother.
 #
 import os
+import sys
 
 import mysql.connector
 import logging
@@ -286,15 +287,18 @@ class Bank:
 	Implementation of the bank server.
 	"""
 
-	def __init__(self, host, ports, debug, db_connector, other_banks, state_collector):
+	def __init__(self, bank_id, host, ports, debug, db_connector, other_banks, state_collector):
 		"""
 		Initializes this server with given values.
-		
+
+		:param string bank_id: Id of this bank (unique in distributed system).
 		:param string host: IP address of this bank.
 		:param list ports: Ports this bank should listen on. If empty, bank will not expect any connections.
 		:param list other_banks: List of banks this one should connect to via ZeroMQ. Each entry should be in format <host>:<port>.
 		:param string state_collector: Address and port of state collector.
 		"""
+
+		self._bank_id = bank_id
 		self._host = host
 		self._ports = ports
 		self._debug = debug
@@ -324,12 +328,15 @@ class Bank:
 
 	def _connect_to_state_collector(self, state_collector):
 		"""
-		Connects to state collector.
+		Connects to state collector. Sending connection message is not required
+		but it's polite and also serves as a way of logging.
+
 		:param string state_collector: Address of the collector service.
 		:return:
 		"""
 		self._collector_socket = self._context.socket(zmq.PAIR)
 		self._collector_socket.connect("tcp://%s" % state_collector)
+		self._collector_socket.send_json(Message("Bank '%s' connected." % self._bank_id, -1).to_dict())
 
 	def _peer_handshake(self, other_peer):
 		"""
@@ -361,6 +368,7 @@ class Bank:
 
 		# start listening if ports are set
 		for port in self._ports:
+			logging.info("Listening on port: %s." % port)
 			socket = self._context.socket(zmq.PAIR)
 			socket.bind("tcp://*:%s" % port)
 			self._my_sockets.append(socket)
@@ -369,6 +377,7 @@ class Bank:
 
 		# connect to neighbours
 		for other_bank in other_banks:
+			logging.info("Connecting to: %s.", other_bank)
 			s = self._peer_handshake(other_bank)
 			if s is not None:
 				self._peers.append(s)
@@ -466,11 +475,12 @@ class Bank:
 			for socket in self._get_available_peers(True):
 				if socket in socks and socks[socket] == zmq.POLLIN:
 					msg = Message.from_dict(socket.recv_json())
+					logging.info("Message received: %s." % msg)
 
 					if self._is_my_socket_that_is_not_ready(socket):
 						# message on main socket that is not ready yet received
 						# check if it's connection or not
-						self._check_connection_message(msg)
+						self._check_connection_message(msg, socket)
 
 					else:
 						# receive normal message from socket
@@ -484,7 +494,6 @@ class Bank:
 		:param Message message: Message received from queue.
 		:param Socket sender: Sender of the received message.
 		"""
-		logging.info("Message received: %s." % message)
 
 		if message.is_credit():
 			self._credit(message.amount)
@@ -605,7 +614,10 @@ class Bank:
 def load_configuration(bank_id):
 	"""
 	Loads configuration of bank addresses and state collector address.
-	:return:
+
+	:param string bank_id: Id of bank to load configuration for.
+
+	:return: Dict with configuration.
 	"""
 	bank_addr_file = "bank-addrs.csv"
 	state_collect_file = "collector.txt"
@@ -629,42 +641,65 @@ def load_configuration(bank_id):
 
 	with open(bank_addr_file, "r") as f:
 		for line in f.readlines():
-			items = line.split(',')
+			items = line.rstrip().split(',')
 			if items[0] not in bank_conf:
 				bank_conf[items[0]] = dict(
 					ports=[],
 					other_banks=[]
 				)
 
-				if len(items) > 1 :
+				if len(items) > 1:
 					bank_conf[items[0]]["ports"] = items[1:]
 			else:
 				bank_conf[items[0]]["other_banks"] = items[1:]
 
 	res["bank_conf"] = bank_conf[bank_id] if bank_id in bank_conf else dict(ports=[], other_banks=[])
+	logging.info("Configuration for bank %s: %s.", bank_id, str(res))
 
 	return res
+
+
+def load_bank_id():
+	"""
+	Bank id is expected to be the first console argument.
+
+	:return: Id of this bank or None if none was passed.
+	"""
+	if (len(sys.argv)) != 2:
+		logging.error("Wrong number of arguments, expected just one, got: %s.", str(sys.argv))
+		return None
+	else:
+		return sys.argv[1]
+
+
+def configure_logging(include_console=False):
+	logging.basicConfig(filename='log.txt',
+						filemode='a',
+						format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
+						datefmt='%H:%M:%S',
+						level=logging.DEBUG)
+
+	if include_console:
+		console = logging.StreamHandler()
+		console.setLevel(logging.DEBUG)
+		logging.getLogger('').addHandler(console)
 
 
 def main():
 	"""
 	Main method of the script, starts the server.
 	"""
-	logging.basicConfig(filename='log.txt',
-						filemode='a',
-						format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
-						datefmt='%H:%M:%S',
-						level=logging.DEBUG)
-	console = logging.StreamHandler()
-	console.setLevel(logging.DEBUG)
-	logging.getLogger('').addHandler(console)
+	configure_logging(True)
 
-	bank_id = 1
+	bank_id = load_bank_id()
+	if bank_id is None:
+		return
+
 	configuration = load_configuration(bank_id)
 	if configuration is None:
 		exit(1)
 
-	logging.info("Bank starting")
+	logging.info("Bank '%s' starting" % bank_id)
 	db_connector = DbConnector()
 	amount = db_connector.get_amount()
 	if amount is not None:
@@ -672,7 +707,8 @@ def main():
 	else:
 		logging.warning("No original amount.")
 
-	bank = Bank(host='0.0.0.0',
+	bank = Bank(bank_id,
+				host='0.0.0.0',
 				ports=configuration["bank_conf"]["ports"],
 				debug=True,
 				db_connector=db_connector,
