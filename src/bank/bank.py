@@ -162,13 +162,17 @@ class LocalState:
 		self._max_channel_count = max_channel_count
 
 		# each channel gets its own list for capturing messages
-		self._pending_channel_messages = {channel: []}
+		self._pending_channel_messages = dict()
 
 		# once the marker is received from channel, its' messages are moved
 		# from _pending_channel_message here
 		self._complete_chanel_messages = {}
+		if channel is not None:
+			self._complete_chanel_messages[channel] = []
 
-		self._complete = False
+		# False by default but in some cases, state may be completed right
+		# at the beginning of algorithm
+		self._complete = len(self._complete_chanel_messages) == max_channel_count
 
 	def add_message(self, channel, message):
 		"""
@@ -193,10 +197,17 @@ class LocalState:
 		:param channel: Channel on which communication is to be recorded no longer.
 		:return:
 		"""
+		logging.debug("Marking channel '%s' as complete." % channel)
+
 		if channel in self._pending_channel_messages:
 			self._complete_chanel_messages[channel] = self._pending_channel_messages[channel]
 			self._pending_channel_messages.pop(channel)
+		else:
+			self._complete_chanel_messages[channel] = []
 
+		logging.debug("Remaining pending channels: %s." % str(len(self._pending_channel_messages)))
+		logging.debug("Complete channels: %s." % str(len(self._complete_chanel_messages)))
+		logging.debug("Max channel count: %s." % self._max_channel_count)
 		if len(self._complete_chanel_messages) == self._max_channel_count:
 			self._complete = True
 
@@ -274,12 +285,24 @@ class StatesHolder:
 		:return: True if the status is complete.
 		"""
 		if marker_id in self._states:
-			return self._states[marker_id].is_complete()
+			c = self._states[marker_id].is_complete()
+			logging.debug("Local state: marker_id=%s; complete=%s" % (marker_id, str(c)))
+			return c
 		else:
 			return False
 
 	def get_state(self, marker_id):
 		return self._states[marker_id]
+
+	def clear_state(self, marker_id):
+		"""
+		Clears state for given marker id.
+
+		:param str marker_id:
+		:return:
+		"""
+		if marker_id in self._states:
+			self._states.pop(marker_id)
 
 
 class Bank:
@@ -325,6 +348,10 @@ class Bank:
 
 		# object for collecting global status
 		self._status_holder = StatesHolder()
+
+		# flag indicating whether a CH-L algorithm
+		# initiated by this bank is currently running
+		self._ch_l_running = False
 
 		self._connect_to_state_collector(state_collector)
 
@@ -420,6 +447,7 @@ class Bank:
 
 		logging.info("Starting receive/send loop.")
 		while self._should_run:
+			self._check_marker_file()
 			self._recv_messages()
 			self._generate_message()
 
@@ -513,6 +541,7 @@ class Bank:
 			else:
 				self._send_refuse(sender)
 		elif message.is_marker():
+			logging.info("Processing marker message: %s." % str(message))
 			self._handle_global_state(message, sender)
 		else:
 			logging.info("Refused from %s." % str(sender))
@@ -529,6 +558,7 @@ class Bank:
 		marker_id = message.amount
 
 		if not self._status_holder.is_state_recorded(marker_id):
+			logging.info("Status for marker '%s' not recorded yet." % marker_id)
 			# 1. mark my current state and send markers to other peers (state = amount of money in the bank)
 			# 2. mark the state of sender as empty list
 			self._mark_my_status(marker_id, sender)
@@ -536,13 +566,16 @@ class Bank:
 
 			# 3. all incoming messages will be recorded
 		else:
+			logging.info("Status for marker '%s' already marked. Marking send %s as complete." % (marker_id, sender))
 			# token with given marker_id was already received -> my state was already marked down
 			# stop recording messages from sender
 			self._status_holder.mark_channel_as_complete(marker_id, sender)
 
-			# messages from all channels recorded -> algorithm ends
-			if self._status_holder.is_status_complete(marker_id):
-				self._report_status(marker_id)
+		# messages from all channels recorded -> algorithm ends
+		if self._status_holder.is_status_complete(marker_id):
+			logging.info("Algorithm for marker %s is complete." % marker_id)
+			self._report_status(marker_id)
+			self._ch_l_cleanup(marker_id)
 
 	def _credit(self, amount):
 		"""
@@ -589,7 +622,9 @@ class Bank:
 		"""
 		peers = self._get_available_peers()
 		for peer in peers:
-			peer.send_json(Message.marker(marker_id).to_dict())
+			msg = Message.marker(marker_id)
+			logging.info("Sending marker message: %s." % msg)
+			peer.send_json(msg.to_dict())
 
 	def _mark_my_status(self, marker_id, sender):
 		"""
@@ -609,7 +644,11 @@ class Bank:
 		:param int marker_id: Id of snapshot to report.
 		:return:
 		"""
-		self._collector_socket.send_json(self._status_holder.get_state(marker_id))
+		local_state = self._status_holder.get_state(marker_id).to_dict()
+		local_state["bank_id"] = self._bank_id
+		local_state["marker_id"] = marker_id
+		logging.info("Reporting local state (%s) for marker %s." % (str(local_state), marker_id))
+		self._collector_socket.send_json(local_state)
 
 	def _is_my_socket_that_is_not_ready(self, socket):
 		"""
@@ -619,6 +658,33 @@ class Bank:
 		:return:
 		"""
 		return socket in self._my_sockets and not self._sockets_ready[socket]
+
+	def _check_marker_file(self):
+		"""
+		Checks if the MARKER file is present and if it is, the global state algorithm is started.
+
+		:return:
+		"""
+
+		marker_filename = "MARKER"
+
+		if os.path.isfile(marker_filename) and not self._ch_l_running:
+			logging.info("'%s' file detected, starting CH-L with id %s." % (marker_filename, self._bank_id))
+			os.remove(marker_filename)
+			self._ch_l_running = True
+			self._handle_global_state(Message.marker(self._bank_id), None)
+
+	def _ch_l_cleanup(self, marker_id):
+		"""
+		Cleanup after chandy lamport algorithm. If the marker id is same
+		as id of this bank, ch_l_running flag is set to False.
+
+		:param str marker_id: Marker ID.
+		:return:
+		"""
+		self._status_holder.clear_state(marker_id)
+		if marker_id == self._bank_id:
+			self._ch_l_running = False
 
 
 def load_configuration(bank_id):
@@ -687,6 +753,9 @@ def load_bank_id():
 
 
 def configure_logging(include_console=False):
+	if os.path.isfile("log.txt"):
+		os.remove("log.txt")
+
 	logging.basicConfig(filename='log.txt',
 						filemode='a',
 						format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',

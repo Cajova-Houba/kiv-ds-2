@@ -58,6 +58,9 @@ def load_configuration():
 
 
 def configure_logging(include_console=False):
+	if os.path.isfile("log.txt"):
+		os.remove("log.txt")
+
 	logging.basicConfig(filename='log.txt',
 						filemode='a',
 						format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
