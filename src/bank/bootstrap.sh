@@ -25,6 +25,6 @@ sudo pip3 install pyzmq
 sudo cp bank/bank.conf /etc/init
 
 sudo rm -f bank/balance.txt
-sudo rm -f bank/log.txt
+rm -f bank/MARKER
 sudo initctl reload-configuration
 sudo start bank BANK_ID=$1

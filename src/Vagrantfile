@@ -6,8 +6,8 @@ cluster = {
   "state-collector" => { :ip => "10.99.1.12", :cpus => 1, :mem => 512, :sources => './state-collector', :destination => 'state-collector', :bootstrap => './state-collector/bootstrap.sh' },
   "bank-1" => { :ip => "10.99.1.13", :cpus => 1, :mem => 512, :sources => './bank', :destination => 'bank', :bootstrap => './bank/bootstrap.sh', :bankId => '1' },
   "bank-2" => { :ip => "10.99.1.14", :cpus => 1, :mem => 512, :sources => './bank', :destination => 'bank', :bootstrap => './bank/bootstrap.sh', :bankId => '2' },
-  #"bank-3" => { :ip => "10.99.1.15", :cpus => 1, :mem => 512, :sources => './bank', :destination => 'bank', :bootstrap => './bank/bootstrap.sh' },
-  #"bank-4" => { :ip => "10.99.1.16", :cpus => 1, :mem => 512, :sources => './bank', :destination => 'bank', :bootstrap => './bank/bootstrap.sh' }
+  "bank-3" => { :ip => "10.99.1.15", :cpus => 1, :mem => 512, :sources => './bank', :destination => 'bank', :bootstrap => './bank/bootstrap.sh', :bankId => '3' },
+  "bank-4" => { :ip => "10.99.1.16", :cpus => 1, :mem => 512, :sources => './bank', :destination => 'bank', :bootstrap => './bank/bootstrap.sh', :bankId => '4' }
 }
 
 # All Vagrant configuration is done below. The "2" in Vagrant.configure

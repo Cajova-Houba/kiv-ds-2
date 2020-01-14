@@ -2,8 +2,18 @@ import zmq
 import logging
 import os
 
+
 def print_state_message(message):
-	logging.info(message)
+	if "status" in message:
+		# pretty print for status messages
+		logging.info("Status message: marker_id=%s; bank_id=%s; status=%s; channel_messages=%s;"%
+					 (message["marker_id"],
+					  message["bank_id"],
+					  message["status"],
+					  message["channel_messages"]))
+	else:
+		# standard logging for everything else
+		logging.info(message)
 
 
 def start_listening(configuration):
