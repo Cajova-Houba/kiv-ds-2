@@ -305,6 +305,10 @@ class Bank:
 		self._db_connector = db_connector
 		self._context = zmq.Context()
 
+		# coefficient used in randrage() to decide
+		# whether a message should be generated or not
+		self._max_time_between_messages = 1000
+
 		# sockets bank is listening on
 		self._my_sockets = []
 
@@ -334,6 +338,7 @@ class Bank:
 		:param string state_collector: Address of the collector service.
 		:return:
 		"""
+		logging.info("Connecting to state collector on address: %s.", state_collector)
 		self._collector_socket = self._context.socket(zmq.PAIR)
 		self._collector_socket.connect("tcp://%s" % state_collector)
 		self._collector_socket.send_json(Message("Bank '%s' connected." % self._bank_id, -1).to_dict())
@@ -350,11 +355,12 @@ class Bank:
 		s.connect("tcp://%s" % other_peer)
 		s.send_json(Message.connect().to_dict())
 		resp = s.recv_json()
-		if Message.from_dict(resp).is_ok():
+		msg = Message.from_dict(resp)
+		if msg.is_ok():
 			logging.info("Handshake successful.")
 			return s
 		else:
-			logging.info("Error during handshake.")
+			logging.warning("Bad handshake response: %s.", str(msg))
 			return None
 
 	def _init_queues(self, other_banks):
@@ -432,7 +438,11 @@ class Bank:
 		if len(peers) == 0:
 			return
 
-		logging.info("Generating message.")
+		# random time between messages
+		if randrange(self._max_time_between_messages) != 0:
+			return
+
+		logging.debug("Generating message.")
 
 		amount = 10000 + randrange(40001)
 		rand = randrange(len(peers))
@@ -458,18 +468,18 @@ class Bank:
 			socket.send_json(Message.ok().to_dict())
 			self._sockets_ready[socket] = True
 		else:
-			logging.info("Wrong message received on main socket.")
+			logging.warning("Wrong message received on main socket.")
 			socket.send_json(Message.refused().to_dict())
 
 	def _recv_messages(self):
 		"""
 		Poll for messages from ZeroMQ. Timeout is between 10 and 100 ms.
 		"""
-		t = 10 + randrange(10000)
+		t = 10
 		socks = dict(self._poller.poll(timeout=t))
 
 		if len(socks) > 0:
-			logging.info("%d sockets polled." % len(socks))
+			logging.debug("%d sockets polled." % len(socks))
 
 			# find which socket has received the message
 			for socket in self._get_available_peers(True):
@@ -620,7 +630,7 @@ def load_configuration(bank_id):
 	:return: Dict with configuration.
 	"""
 	bank_addr_file = "bank-addrs.csv"
-	state_collect_file = "collector.txt"
+	state_collect_file = "state-collector.csv"
 
 	logging.info("Loading configuration")
 
@@ -636,8 +646,11 @@ def load_configuration(bank_id):
 	res = dict()
 	bank_conf = dict()
 
+	state_collector_conf = dict()
 	with open(state_collect_file, "r") as f:
-		res["state_collector"] = f.read()
+		for line in f.readlines():
+			items = line.rstrip().split(',')
+			state_collector_conf[items[0]] = items[1]
 
 	with open(bank_addr_file, "r") as f:
 		for line in f.readlines():
@@ -654,6 +667,7 @@ def load_configuration(bank_id):
 				bank_conf[items[0]]["other_banks"] = items[1:]
 
 	res["bank_conf"] = bank_conf[bank_id] if bank_id in bank_conf else dict(ports=[], other_banks=[])
+	res["state_collector"] = state_collector_conf[bank_id]
 	logging.info("Configuration for bank %s: %s.", bank_id, str(res))
 
 	return res

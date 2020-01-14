@@ -19,9 +19,9 @@ def start_listening(configuration):
 	sockets = []
 	poller = zmq.Poller()
 	for port in configuration["ports"]:
-		logging.info("Listening on port: %s" % port)
+		logging.info("Listening on port: %s" % port.rstrip())
 		s = context.socket(zmq.PAIR)
-		s.bind("tcp://*:%s" % port)
+		s.bind("tcp://*:%s" % port.rstrip())
 		poller.register(s, zmq.POLLIN)
 		sockets.append(s)
 
