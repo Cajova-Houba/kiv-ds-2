@@ -330,7 +330,7 @@ class Bank:
 
 		# coefficient used in randrage() to decide
 		# whether a message should be generated or not
-		self._max_time_between_messages = 1000
+		self._max_time_between_messages = 5
 
 		# sockets bank is listening on
 		self._my_sockets = []
