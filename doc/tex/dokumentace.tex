@@ -57,53 +57,99 @@
 	K implementaci jsem si vybral jazyk Python (verze 3). Banky a služba pro sběr globálního stavu spolu navzájem komunikují skrze ZroMQ fronty. Systém obsahuje 4 bankovní servery a jednu službu pro sběr stavu.
 	
 	\subsection{Topologie systému}
-	TODO
-	Topologie systému, společně s IP adresou virtuálního stroje a portem, na kterém je přístupné REST API je znázorněna na obrázku \ref{fig:topology}. Každý virtuální stroj je založen na image \verb|ubuntu/trusty32| -- můj počítač nepodporuje virtualizaci 64 bitových systémů.
-	
-	Dokumentaci API jednotlivých serverů je přiložena v souborech \verb|sequencer-api.yml|, \verb|shuffler-api.yml| a \verb|bank-api.yml|.
+	Topologie systému, společně s IP adresami virtuálních strojů a porty, na kterých služby poslouchají je znázorněna na obrázku \ref{fig:topology}. Každý virtuální stroj je založen na image \verb|ubuntu/trusty32| -- můj počítač nepodporuje virtualizaci 64 bitových systémů. 
 	
 	\begin{figure}[H]
 		\centering
 		\includegraphics[width=15cm]{img/topologie.png}
 		\caption{Topologie systému}
-		\label{fig:topology.pdf_tex}
+		\label{fig:topology}
 	\end{figure}
 
 	\subsection{Konfigurace}
-	TODO
+	Bankovní služba při spuštění čte z konfiguračních souborů porty, na kterých má poslouchat a adresy, na které se má připojit. Adresy pro připojení k ostatním bankám a state collectoru jsou ve zvláštních souborech. Příklad csv souboru pro konfiguraci propojení bank:
+	
+	\begin{verbatim}
+1,8100,8101
+2,8100,8101
+3,8100
+4
+3,10.99.1.13:8100,10.99.1.14:8100
+4,10.99.1.13:8101,10.99.1.14:8101,10.99.1.15:8100
+	\end{verbatim}
+	
+	První sloupec je ID banky, v následujících sloupcích jsou buď porty na kterých banka poslouchá, nebo adresy, kam se připojí.
 	
 	\subsection{Obecná struktura projektu}
-	Zdrojové kódy projektu se nachází ve složce \verb|src|. Každý server je umístěn ve vlastní složce (\verb|client|, \verb|bank-1|, ...). V adresáři \verb|src| je také umístěn \verb|Vagrantfile| obsahující konfiguraci nasazení virtuálních strojů. 
+	Zdrojové kódy projektu se nachází ve složce \verb|src|. Bankovní služba je umístěna ve složce \verb|bank|, služba pro sběr globálního stavu je umístěna ve složce \verb|state-collector|. V adresáři \verb|src| je také umístěn \verb|Vagrantfile| obsahující konfiguraci nasazení virtuálních strojů. 
 	
 	Server je tvořen python skriptem, konfiguračním souborem pro \verb|upstart| a skriptem \verb|bootstrap.sh|, který server inicializuje a spouští. Každý server je na virtuálním stroji veden jako služba. Tím je možné daný server pohodlně vypínat/zapínat. 	Každý ze serverů loguje svou činnost do souboru \verb|log.txt|, skrze který je možné za běhu kontrolovat stav systému. 
 	
 	\begin{figure}[H]
 		\centering
-%		\includegraphics[width=2.5cm]{server-structure.png}
+		\includegraphics[width=2.5cm]{img/server-structure.png}
 		\caption{Obecná struktura složky serveru}
-		\label{fig:serv-struct.pdf_tex}
+		\label{fig:serv-struct}
 	\end{figure}
 	
 	\subsection{Bank N}
-	Bankovní server přijímá pokyny k transakcím od shuffleru a ukládá je do interní haldy. Na vrchu této haldy je pokyn s nejmenším časovým razítkem (ta generuje sekvencer). Při spuštění bankovního serveru je nastaven interní čítač očekávaných id na hodnotu, která musí odpovídat prvnímu id generovanému sekvencerem. Pokud je na vrcholu haldy pokyn s $id = expected\_id$, je vyjmut a proveden. 	Po každé provedené transakci je do souboru \verb|balance.txt| zapsán současný zůstatek na účtě. 
+	Každá banka má své unikátní ID. Po spuštění bankovní server přijímá a náhodně generuje zprávy, které posílá svým sousedům. Zprávy jsou odesílány pouze na aktivní sockety (je připojen protějšek). Každý bankovní server má vlastní databázi běžící na daném virtuálním stroji. Struktura zprávy posílané mezi bankami je znázorněna na obrázku \ref{fig:message} -- \verb|type| je \verb|CREDIT|, nebo \verb|DEBIT| a \verb|amount| je částka, se kterou má být daná operace provedena. Speciálním typem je pak zpráva \verb|REFUSE| s částkou nastavenou na -1, která oznamuje neplatnou operaci (na účtu banky není dostatek peněz).
 	
-	Vzhledem k nutnosti 'synchronizace' prvního id generovaného sekvencerem a počátečního \verb|expected_id| bankovního serveru je v případě restartu sekvenceru nutné restartovat také všechny bankovní servery (a naopak).
+	\begin{figure}[H]
+		\centering
+		\includegraphics[width=3cm]{img/message.png}
+		\caption{Struktura zprávy posílané mezi bankami}
+		\label{fig:message}
+	\end{figure}
 	
-	Každý bankovní server má vlastní databázi běžící na daném virtuálním stroji.
+	\subsubsection{Připojení k bankovní službě}
+	Bankovní služby při připojení provádějí zjednodušený handshake,	aby server (banka, která na socketu poslouchá) mohl rozpoznat, kdy se protějšek připojil. Handshake (znázorněn na obrázku \ref{fig:handshake}) spočívá v odeslání \verb|CONNECTION| zprávy ihned po připojení se k socketu. Po přijetí a potvrzení \verb|CONNECTION| zprávy si server označí daný socket jako připravený a začne na něj odesílat zprávy.
+
+	\begin{figure}[H]
+		\centering
+		\includegraphics[height=8cm]{img/bank-handshake.png}
+		\caption{Handshake mezi bankovními službami}
+		\label{fig:handshake}
+	\end{figure}
 	
 	\subsubsection{Chandy-Lamport}
-	TODO
+	Součástí smyčky přijmi zprávy/odešli zprávy bankovního server je také kontrola, zda se má spustit algoritmus pro detekci globálního stavu. Server pravidelně kontroluje přítomnost souboru pojmenovaného \verb|MARKER| ve svém pracovním adresáři. Pokud tento soubor existuje, server spustí Chandy-Lamportův algoritmus a rozešle zprávy \verb|MARKER| svým sousedům.
+	
+	Po dokončení algoritmu odešle server svůj zaznamenaný stav a stav komunikačních kanálu state collectoru, který jej zaloguje. 
+	
+	Aby bylo možné spouštět více snapshotů najednou, obsahuje každá \verb|MARKER| zpráva také unikátní ID, na jehož základě je stav zaznamenán. Jako ID je použito ID banky, předpokládá se, že jeden uzel nemůže algoritmus spustit vícekrát najednou (musí tedy počkat až jím iniciovaný algoritmus doběhne). Struktura, která v každé bance udržuje lokální stavy (1 stav pro 1 marker id) je znázorněna na obrázku \ref{fig:state-holder}. Výsledný globální stav je pak složen z jednotlivých lokálních stavů všech bank.
+	
+	\begin{figure}[H]
+		\centering
+		\includegraphics[width=11cm]{img/state-holder.png}
+		\caption{Struktura pro udržení lokálních stavů}
+		\label{fig:state-holder}
+	\end{figure}
 	
 	\subsection{Služba pro sběr stavů systému}
-	TODO
+	State collector po spuštění poslouchá na předem konfigurovaných portech (na které se připojují banky) a vypisuje příchozí zprávy so souboru \verb|log.txt| umístěného v pracovním adresáři.
+	
+	Výpis stavové zprávy má následující formát:
+	
+	\begin{verbatim}
+		Status message: marker_id=%s; bank_id=%s; status=%s; channel_messages=%s
+	\end{verbatim}
+	
+	Kde \verb|marker_id| je unikátní id použité k rozeznání jednotlivých \verb|MARKER| zpráv. \verb|bank_id| je id banky, která danou stavovou zprávu odeslala, \verb|status| je zůstatek na účtu banky a \verb|channel_messages| jsou zprávy přijaté bankou od odeslání \verb|MARKER| do konce algoritmu.
 	
 	\section{Spuštění}
-	TODO
-	Systém je možné spustit příkazem \verb|vagrant up| v adresáři \verb|src|. Stav klienta je možné kontrolovat skrze ssh na vrituální stroj příkazem \verb|status client|. V případě, že klient doběhl, jeho status bude \verb|stop/waiting|.
+	Systém je možné spustit příkazem \verb|vagrant up| v adresáři \verb|src|. Sběr globálního stavu je možné spustit příkazem \verb|touch MARKER| v adresáři \verb|bank| kterékoliv bankovní služby. Globální stav je pak možné přečíst v souboru \verb|state-collector/log.txt|. Příklad výpisu logu, který obsahuje globální stav je na obrázku \ref{fig:global-state}.
 	
-	Po doběhnutí klienta lze zkontrolovat zůstatky bankovních serverů. Zůstatek je na každém serveru uložen v souboru \verb|/home/vagrant/bank/balance.txt|.
+	\begin{figure}[H]
+		\centering
+		\includegraphics[width=15cm]{img/global-state.png}
+		\caption{Příklad výpisu globálního stavu}
+		\label{fig:global-state}
+	\end{figure}
 	
 	\section{Závěr}
+	Práci se mi podařilo úspěšně implementovat.
+	
 	TODO
 	Práci se mi podařilo úspěšně implementovat. Míchání požadavků shufflerem by bylo lepší realizovat skrze náhodné zpoždění, systém by tak více odrážel reálný stav. Zapisovat aktuální zůstatek na účte do souboru po každé provedené transakci je není obecně dobrá praktika, ale zde to usnadňuje testování a kontrolu výsledků.
 	
