@@ -57,7 +57,7 @@
 	K implementaci jsem si vybral jazyk Python (verze 3). Banky a služba pro sběr globálního stavu spolu navzájem komunikují skrze ZroMQ fronty. Systém obsahuje 4 bankovní servery a jednu službu pro sběr stavu.
 	
 	\subsection{Topologie systému}
-	Topologie systému, společně s IP adresami virtuálních strojů a porty, na kterých služby poslouchají je znázorněna na obrázku \ref{fig:topology}. Každý virtuální stroj je založen na image \verb|ubuntu/trusty32| -- můj počítač nepodporuje virtualizaci 64 bitových systémů. 
+	Topologie systému, společně s IP adresami virtuálních strojů a porty, na kterých služby poslouchají, je znázorněna na obrázku \ref{fig:topology}. Každý virtuální stroj je založen na image \verb|ubuntu/trusty32| -- můj počítač nepodporuje virtualizaci 64 bitových systémů. 
 	
 	\begin{figure}[H]
 		\centering
@@ -113,11 +113,11 @@
 	\end{figure}
 	
 	\subsubsection{Chandy-Lamport}
-	Součástí smyčky přijmi zprávy/odešli zprávy bankovního server je také kontrola, zda se má spustit algoritmus pro detekci globálního stavu. Server pravidelně kontroluje přítomnost souboru pojmenovaného \verb|MARKER| ve svém pracovním adresáři. Pokud tento soubor existuje, server spustí Chandy-Lamportův algoritmus a rozešle zprávy \verb|MARKER| svým sousedům.
+	Součástí smyčky přijmi zprávy/odešli zprávy bankovního serveru je také kontrola, zda se má spustit algoritmus pro detekci globálního stavu. Server pravidelně kontroluje přítomnost souboru pojmenovaného \verb|MARKER| ve svém pracovním adresáři. Pokud tento soubor existuje, server spustí Chandy-Lamportův algoritmus a rozešle zprávy \verb|MARKER| svým sousedům.
 	
 	Po dokončení algoritmu odešle server svůj zaznamenaný stav a stav komunikačních kanálu state collectoru, který jej zaloguje. 
 	
-	Aby bylo možné spouštět více snapshotů najednou, obsahuje každá \verb|MARKER| zpráva také unikátní ID, na jehož základě je stav zaznamenán. Jako ID je použito ID banky, předpokládá se, že jeden uzel nemůže algoritmus spustit vícekrát najednou (musí tedy počkat až jím iniciovaný algoritmus doběhne). Struktura, která v každé bance udržuje lokální stavy (1 stav pro 1 marker id) je znázorněna na obrázku \ref{fig:state-holder}. Výsledný globální stav je pak složen z jednotlivých lokálních stavů všech bank.
+	Aby bylo možné spouštět více snapshotů najednou, obsahuje každá \verb|MARKER| zpráva také unikátní ID, na jehož základě je stav zaznamenán. Jako ID je použito ID banky. Předpokládá se, že jeden uzel nemůže algoritmus spustit vícekrát najednou (musí tedy počkat až jím iniciovaný algoritmus doběhne). Struktura, která v každé bance udržuje lokální stavy (1 stav pro 1 marker id) je znázorněna na obrázku \ref{fig:state-holder}. Výsledný globální stav je pak složen z jednotlivých lokálních stavů všech bank.
 	
 	\begin{figure}[H]
 		\centering
@@ -127,7 +127,7 @@
 	\end{figure}
 	
 	\subsection{Služba pro sběr stavů systému}
-	State collector po spuštění poslouchá na předem konfigurovaných portech (na které se připojují banky) a vypisuje příchozí zprávy so souboru \verb|log.txt| umístěného v pracovním adresáři.
+	State collector po spuštění poslouchá na předem konfigurovaných portech (na které se připojují banky) a vypisuje příchozí zprávy do souboru \verb|log.txt| umístěného v pracovním adresáři.
 	
 	Výpis stavové zprávy má následující formát:
 	
