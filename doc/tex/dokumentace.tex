@@ -138,7 +138,7 @@
 	Kde \verb|marker_id| je unikátní id použité k rozeznání jednotlivých \verb|MARKER| zpráv. \verb|bank_id| je id banky, která danou stavovou zprávu odeslala, \verb|status| je zůstatek na účtu banky a \verb|channel_messages| jsou zprávy přijaté bankou od odeslání \verb|MARKER| do konce algoritmu.
 	
 	\section{Spuštění}
-	Systém je možné spustit příkazem \verb|vagrant up| v adresáři \verb|src|. Sběr globálního stavu je možné spustit příkazem \verb|touch MARKER| v adresáři \verb|bank| kterékoliv bankovní služby. Globální stav je pak možné přečíst v souboru \verb|state-collector/log.txt|. Příklad výpisu logu, který obsahuje globální stav je na obrázku \ref{fig:global-state}.
+	Systém je možné spustit příkazem \verb|vagrant up| v adresáři \verb|src|. Sběr globálního stavu je možné spustit příkazem \verb|touch MARKER| v adresáři \verb|bank| kterékoliv bankovní služby. Globální stav je pak možné přečíst v souboru \verb|state-collector/log.txt| (například příkazem \verb|touch -f state-collector/log.txt|). Příklad výpisu logu, který obsahuje globální stav je na obrázku \ref{fig:global-state}.
 	
 	\begin{figure}[H]
 		\centering
@@ -147,10 +147,9 @@
 		\label{fig:global-state}
 	\end{figure}
 	
-	\section{Závěr}
-	Práci se mi podařilo úspěšně implementovat.
+	Poznámka: všechny virtuální stroje mají v konfiguraci vypnutou HW virtualizaci (\verb|["--hwvirtex", "off"]|). V případě, že by to při spuštění dělalo problémy, je možné ji zapnout.
 	
-	TODO
-	Práci se mi podařilo úspěšně implementovat. Míchání požadavků shufflerem by bylo lepší realizovat skrze náhodné zpoždění, systém by tak více odrážel reálný stav. Zapisovat aktuální zůstatek na účte do souboru po každé provedené transakci je není obecně dobrá praktika, ale zde to usnadňuje testování a kontrolu výsledků.
+	\section{Závěr}
+	Práci se mi podařilo úspěšně implementovat. Bohužel, algoritmus je moc rychlý a nepodařilo se mi při testování zachytit stav tak, že by jeho součástí byly neprázdné stavy kanálů.
 	
 \end{document}
